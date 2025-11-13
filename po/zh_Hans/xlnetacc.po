@@ -115,3 +115,12 @@ msgstr "无日志数据。"
 
 msgid "Error get log data."
 msgstr "获取日志数据失败。"
+
+msgid "Disabled"
+msgstr "禁用"
+
+msgid "Use system routing (for proxy/VPN)"
+msgstr "使用系统路由 (适用于代理/VPN)"
+
+msgid "Check this if you use OpenClash/Passwall to route traffic. This will ignore the interface selection below."
+msgstr "如果您使用 OpenClash/Passwall 等代理来路由流量，请勾选此项。这将忽略下方的接口选择。"

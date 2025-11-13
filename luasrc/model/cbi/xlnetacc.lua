@@ -21,12 +21,23 @@ o.default = "1"
 o = s:option(Flag, "verbose", translate("Enable verbose logging"))
 o:depends("logging", "1")
 
-o = s:option(ListValue, "network", translate("Upgrade interface"))
+-- --- 关键修改：重命名复选框，并移到 "提速接口" 上方 ---
+o_proxy = s:option(Flag, "use_system_routing", translate("Use system routing (for proxy/VPN)"))
+o_proxy.rmempty = false
+o_proxy.description = translate("Check this if you use OpenClash/Passwall to route traffic. This will ignore the interface selection below.")
+
+-- --- 关键修改：添加 "禁用" 选项，并添加对复选框的依赖 ---
+o_iface = s:option(ListValue, "network", translate("Upgrade interface"))
+o_iface:value("", translate("Disabled")) -- 新增 "禁用"
 uci:foreach("network", "interface", function(section)
 	if section[".name"] ~= "loopback" then
-		o:value(section[".name"])
+		o_iface:value(section[".name"])
 	end
 end)
+-- 当 "use_system_routing" 被勾选时，隐藏此选项
+o_iface:depends("use_system_routing", "0") 
+o_iface:depends("use_system_routing", nil)
+-- --- 修改结束 ---
 
 o = s:option(Value, "keepalive", translate("Keepalive interval"), "5-60 " .. translate("minutes"))
 for _, v in ipairs({5, 10, 20, 30, 60}) do

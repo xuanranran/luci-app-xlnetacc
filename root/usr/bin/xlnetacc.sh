@@ -14,6 +14,7 @@ readonly client_type_up='android-uplink'
 
 # 声明全局变量
 _bind_ip=
+use_system_routing=0
 _http_cmd=
 _peerid=
 _devicesign=
@@ -106,20 +107,38 @@ get_bind_ip() {
 # 定义基本 HTTP 命令和参数
 gen_http_cmd() {
 	_http_cmd="wget-ssl -nv -t 1 -T 5 -O - --no-check-certificate"
-	_http_cmd="$_http_cmd --bind-address=$_bind_ip"
+	if [ $use_system_routing -eq 1 ]; then
+		_log "使用系统路由模式: 依赖系统路由 (如 OpenClash/Passwall)" $(( 1 | 4 ))
+	elif [ -n "$_bind_ip" ]; then
+		_http_cmd="$_http_cmd --bind-address=$_bind_ip"
+	else
+		_log "未获取到绑定IP, 且未启用系统路由模式" $(( 1 | 32 ))
+	fi
 }
 
 # 生成设备标识
 gen_device_sign() {
 	local ifname macaddr
-	while : ; do
-		ifname=$(uci get "network.$network.device" 2> /dev/null)
-		[ "${ifname:0:1}" == "@" ] && network="${ifname:1}" || break
-	done
-	[ -z "$ifname" ] && { _log "获取网络 $network 信息出错"; return; }
-	json_cleanup; json_load "$(ubus call network.device status {\"name\":\"$ifname\"} 2> /dev/null)" >/dev/null 2>&1
-	json_get_var macaddr "macaddr"
-	[ -z "$macaddr" ] && { _log "获取网络 $network MAC地址出错"; return; }
+	# 仅在 "指定接口" 模式下才需要获取MAC
+	if [ $use_system_routing -eq 0 ]; then
+		while : ; do
+			ifname=$(uci get "network.$network.device" 2> /dev/null)
+			[ "${ifname:0:1}" == "@" ] && network="${ifname:1}" || break
+		done
+		[ -z "$ifname" ] && { _log "获取网络 $network 信息出错"; return; }
+		json_cleanup; json_load "$(ubus call network.device status {\"name\":\"$ifname\"} 2> /dev/null)" >/dev/null 2>&1
+		json_get_var macaddr "macaddr"
+		[ -z "$macaddr" ] && { _log "获取网络 $network MAC地址出错"; return; }
+	else
+		# "系统路由" 模式下，MAC地址不是关键，尝试从 lan 获取
+		macaddr=$(uci get network.lan.macaddr 2> /dev/null)
+		if [ -z "$macaddr" ]; then
+			# 最后的备用方案
+			json_cleanup; json_load "$(ubus call network.device status {\"name\":\"br-lan\"} 2> /dev/null)" >/dev/null 2>&1
+			json_get_var macaddr "macaddr"
+		fi
+		[ -z "$macaddr" ] && { _log "获取 lan MAC地址出错, 无法生成设备ID"; return; }
+	fi
 	macaddr=$(echo -n "$macaddr" | awk '{print toupper($0)}')
 
 	# 计算peerID
@@ -273,7 +292,11 @@ swjsq_getuserinfo() {
 					$vasid_up) outmsg="上行提速会员";;
 					*) continue;;
 				esac
+				
+				# --- 这是修复后的行 ---
 				if [ ${isVip:-0} -eq 1 -o ${isYear:-0} -eq 1 ]; then
+				# --- 修复结束 ---
+				
 					outmsg="${outmsg}有效。会员到期时间：${expireDate:0:4}-${expireDate:4:2}-${expireDate:6:2}"
 					[ $vasid -eq $vasid_up ] && _log "$outmsg" $(( 1 | 16 )) || _log "$outmsg" $(( 1 | 8 ))
 					[ $vasid -ne $vasid_up ] && can_down=$(( $can_down | 1 ))
@@ -302,11 +325,18 @@ swjsq_getuserinfo() {
 
 # 登录时间更新
 swjsq_renewal() {
-	xlnetacc_var 1
+	# --- FIX: "parameter error!" START ---
+	# 不要调用 xlnetacc_var 1。构建基于帐户的参数。
 	local limitdate=$(date +%Y%m%d -d "1970.01.01-00:00:$(( $(date +%s) + 30 * 24 * 60 * 60 ))")
-
 	access_url='http://api.ext.swjsq.vip.xunlei.com'
-	local ret=$($_http_cmd --user-agent="$user_agent" "$access_url/renewal?${http_args%&dial_account=*}&limitdate=$limitdate")
+	
+	# 构建一个最小化的 http_args，仅包含帐户信息
+	local renewal_args="peerid=${_peerid}&userid=${_userid}&sessionid=${_sessionid}&user_type=1&os=android-7.1.1&limitdate=$limitdate"
+
+	# 使用帐户用户代理 ($agent_xl)，而不是 ISP 代理 ($agent_down)
+	local ret=$($_http_cmd --user-agent="$agent_xl" "$access_url/renewal?$renewal_args")
+	# --- FIX: "parameter error!" END ---
+	
 	_log "renewal is $ret" $(( 1 | 4 ))
 	json_cleanup; json_load "$ret" >/dev/null 2>&1
 	json_get_var lasterr "errno"
@@ -618,7 +648,15 @@ xlnetacc_init() {
 	readonly username=$(uci_get_by_name "general" "account")
 	readonly password=$(uci_get_by_name "general" "password")
 	local enabled=$(uci_get_by_bool "general" "enabled" 0)
-	([ $enabled -eq 0 ] || [ $down_acc -eq 0 -a $up_acc -eq 0 ] || [ -z "$username" -o -z "$password" -o -z "$network" ]) && return 2
+	use_system_routing=$(uci_get_by_bool "general" "use_system_routing" 0)
+	
+	# 检查 "指定接口" 和 "系统路由" 的冲突
+	if [ $use_system_routing -eq 0 -a -z "$network" ]; then
+		_log "错误: 必须选择一个提速接口, 或者勾选 '使用系统路由'" $(( 1 | 2 | 32 ))
+		return 2
+	fi
+	
+	([ $enabled -eq 0 ] || [ $down_acc -eq 0 -a $up_acc -eq 0 ] || [ -z "$username" -o -z "$password" ]) && return 2
 	([ -z "$keepalive" -o -n "${keepalive//[0-9]/}" ] || [ $keepalive -lt 5 -o $keepalive -gt 60 ]) && keepalive=10
 	readonly keepalive=$(( $keepalive ))
 	([ -z "$relogin" -o -n "${relogin//[0-9]/}" ] || [ $relogin -gt 48 ]) && relogin=0
@@ -640,7 +678,7 @@ xlnetacc_init() {
 
 	# 生成设备标识
 	gen_device_sign
-	[ ${#_peerid} -ne 16 -o ${#_devicesign} -ne 71 ] && return 4
+	[ ${#_peerid} -ne 16 -o ${#_devicesign} -ne 71 ] && { _log "生成设备ID失败，请检查MAC地址"; return 4; }
 
 	clean_log
 	[ -d /var/state ] || mkdir -p /var/state
@@ -652,7 +690,11 @@ xlnetacc_init() {
 xlnetacc_main() {
 	while : ; do
 		# 获取外网IP地址
-		xlnetacc_retry 'get_bind_ip'
+		if [ $use_system_routing -eq 1 ]; then
+			_log "已启用系统路由, 将使用系统(代理)路由"
+		else
+			xlnetacc_retry 'get_bind_ip'
+		fi
 		gen_http_cmd
 
 		# 注销快鸟帐号

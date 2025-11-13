@@ -4,15 +4,115 @@
 		text-align: left;
 		height: 500px;
 		overflow: auto;
+		/* 浅色模式下的默认样式 */
+		background-color: #f9f9f9;
+		border: 1px solid #ddd;
+		border-radius: 4px;
+		color: #333;
 	}
 	#log_text pre {
-		word-break: break-all;
+		/* --- 关键：修复边界超过问题 --- */
+		white-space: pre-wrap;   /* 1. 保留空白符(如换行)并允许自动换行 */
+		word-break: break-all;   /* 2. 强制长字符串(如JSON)在任意位置断开 */
+		/* --- ------------------ --- */
+		
 		margin: 0;
+		padding: 10px;
+		font-family: monospace;
+		
+		/* 浅色模式下的 <pre> 样式 */
+		background-color: #ffffff;
+		border: 1px solid #eee;
+		border-radius: 4px;
+		color: #333;
 	}
 	.description {
 		color: #ffffff;
 		background-color: #0099ff;
+		/* 美化：增加一点内边距和圆角 */
+		padding: 2px 6px;
+		border-radius: 3px;
+		display: inline-block;
 	}
+
+	/* --- 关键：日志行颜色 --- */
+	.log-date {
+		color: #0088cc; /* 日期颜色 (浅色) */
+		font-weight: bold;
+	}
+	.log-msg {
+		color: inherit; /* 消息颜色 (继承pre) */
+	}
+	
+	/* --- 折叠日志的样式 --- */
+	details.log-foldable {
+		border: 1px solid #e0e0e0;
+		border-radius: 4px;
+		margin-bottom: 2px; /* 折叠行之间的间距 */
+		background: #fdfdfd;
+	}
+	details.log-foldable[open] {
+		background: #ffffff; /* 展开时的背景 */
+	}
+	details.log-foldable summary {
+		cursor: pointer;
+		padding: 2px 5px;
+		user-select: none; /* 防止点击时选中文本 */
+		display: list-item; /* 显示默认的展开/折叠三角 */
+	}
+	details.log-foldable summary > .log-summary {
+		font-style: italic;
+		color: #555;
+		padding-left: 10px;
+	}
+	/* 展开后的完整日志内容 */
+	details.log-foldable > .log-msg {
+		display: block;
+		padding: 10px;
+		border-top: 1px dashed #eee;
+		margin-top: 5px;
+	}
+	/* --- 折叠样式结束 --- */
+
+
+	/* --- 关键：适配暗色模式 --- */
+	@media (prefers-color-scheme: dark) {
+		#log_text {
+			background-color: #2a2a2a;
+			border-color: #444;
+			color: #ccc;
+		}
+		#log_text pre {
+			background-color: #1e1e1e;
+			border-color: #333;
+			color: #d4d4d4;
+		}
+		.description {
+			background-color: #007acc;
+		}
+
+		/* --- 暗色模式日志行颜色 --- */
+		.log-date {
+			color: #56b6c2; /* 日期颜色 (暗色 - 青色) */
+		}
+		
+		/* --- 暗色模式折叠样式 --- */
+		details.log-foldable {
+			border-color: #444;
+			background: #2c2c2c;
+		}
+		details.log-foldable[open] {
+			background: #1e1e1e;
+		}
+		details.log-foldable summary > .log-summary {
+			color: #aaa;
+		}
+		details.log-foldable > .log-msg {
+			border-top-color: #444;
+		}
+		/* --- 暗色折叠样式结束 --- */
+	}
+	/* --- ------------------ --- */
 ]]
 %>
 
@@ -30,15 +130,83 @@
 
 <script type="text/javascript" src="<%=resource%>/cbi.js"></script>
 <script type="text/javascript">//<![CDATA[
+	
+	// --- 修改：格式化日志的辅助函数 (增加 "login is" 折叠) ---
+	function formatLogLines(logData, logType) {
+		if (!logData) return '<%:No log data.%>';
+		
+		var re;
+		if (logType === 'syslog') {
+			// 匹配: "Thu Nov 13 05:48:41 2025 " (以及后面的内容)
+			re = /^(.*?\d{4} )(.+)$/;
+		} else {
+			// 匹配: "2025/11/13 05:48:42 " (以及后面的内容)
+			re = /^(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} )(.+)$/;
+		}
+
+		// 1. 关键：先转义，防止日志内容破坏HTML
+		var escapedLog = logData
+			.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+		// 2. 按行分割处理
+		return escapedLog
+			.split('\n') 
+			.map(function(line) {
+				var match = line.match(re);
+				if (match) {
+					var date_html = '<span class="log-date">' + match[1] + '</span>';
+					var msg_content = match[2]; // 内容已转义
+					var summary_text = ''; // 摘要文本
+
+					// --- 检查折叠关键词 ---
+					if (msg_content.includes('getuserinfo is')) {
+						summary_text = msg_content.substring(0, 100) + '... (Click to expand)';
+					}
+					// --- 新增：检查 "login is" ---
+					else if (msg_content.includes('login is')) {
+						summary_text = msg_content.substring(0, 100) + '... (Click to expand)';
+					}
+					// --- 检查结束 ---
+
+					// --- 根据是否有摘要来构建HTML ---
+					if (summary_text) {
+						// 3a. 返回 <details> 结构 (折叠行)
+						return '<details class="log-foldable">' +
+									'<summary>' +
+										date_html +
+										'<span class="log-summary">' + summary_text + '</span>' +
+									'</summary>' +
+									// 展开后的完整内容
+									'<span class="log-msg">' + msg_content + '</span>' + 
+								'</details>';
+					} else {
+						// 3b. 返回普通高亮行
+						return date_html + 
+							   '<span class="log-msg">' + msg_content + '</span>';
+					}
+				}
+				// 4. 如果没有匹配(例如空行)，则原样包裹
+				return '<span class="log-msg">' + line + '</span>'; 
+			})
+			.join('\n'); // 5. 用换行符重新组合 (<pre> 标签会处理换行)
+	}
+	// --- 辅助函数结束 ---
+
 	var log_id = document.getElementById('log_text');
 	XHR.poll(5, '<%=luci.dispatcher.build_url("admin", "services", "xlnetacc", "logdata")%>', null, function(x, data) {
 		if ( log_id && data ) {
+		
+			// --- 在显示前格式化数据 ---
+			var formattedSyslog = formatLogLines(data.syslog, 'syslog');
+			var formattedClient = formatLogLines(data.client, 'client');
+			// --- 修改结束 ---
+
 			log_id.innerHTML = String.format(
 				'<pre>%s%s%s%s</pre>',
 				'<span class="description"><strong><%:syslog:%></strong></span><br/>',
-				data.syslog || '<%:No log data.%>',
+				formattedSyslog, // 使用格式化后的数据
 				'<br/><br/><span class="description"><strong><%:log file:%></strong></span><br/>',
-				data.client || '<%:No log data.%>'
+				formattedClient  // 使用格式化后的数据
 			);
 		} else if ( log_id ) {
 			log_id.innerHTML = '<strong><%:Error get log data.%></strong>';
