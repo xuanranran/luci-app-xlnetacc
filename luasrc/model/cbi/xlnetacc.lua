@@ -22,13 +22,13 @@ o = s:option(Flag, "verbose", translate("Enable verbose logging"))
 o:depends("logging", "1")
 
 -- --- 关键修改：重命名复选框，并移到 "提速接口" 上方 ---
-o_proxy = s:option(Flag, "use_system_routing", translate("Use system routing (for proxy/VPN)"))
+o_proxy = s:option(Flag, "use_system_routing", translate("使用系统路由 (适用于代理/VPN)"))
 o_proxy.rmempty = false
-o_proxy.description = translate("Check this if you use OpenClash/Passwall to route traffic. This will ignore the interface selection below.")
+o_proxy.description = translate("如果您使用 OpenClash/Passwall 等代理来路由流量，请勾选此项。这将忽略下方的接口选择。")
 
 -- --- 关键修改：添加 "禁用" 选项，并添加对复选框的依赖 ---
 o_iface = s:option(ListValue, "network", translate("Upgrade interface"))
-o_iface:value("", translate("Disabled")) -- 新增 "禁用"
+o_iface:value("", translate("禁用")) -- 新增 "禁用"
 uci:foreach("network", "interface", function(section)
 	if section[".name"] ~= "loopback" then
 		o_iface:value(section[".name"])
